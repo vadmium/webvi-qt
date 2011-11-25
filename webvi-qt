@@ -1,0 +1,320 @@
+#! /usr/bin/env python2
+#coding=UTF-8
+from __future__ import print_function
+
+# python2-webvi requirements >=
+# python2-pycurl
+# python2-libxslt1
+# python2-libxml2
+#
+# Run uninstalled webvi as
+# PYTHONPATH=src/libwebvi python2 src/webvicli/webvi --templatepath=templates
+
+# Dependencies:
+# python2
+# python2-qt4
+# python2-webvi
+# QT or Freedesktop icon theme?
+
+# TODO
+# Investigate timeouts (keeps retrying when gateway removed)
+# Investigate parallel menu requests (nothing ever terminates)
+
+import webvi.api as webvi
+from webvi.constants import (
+    WebviRequestType, WebviOpt, WebviConfig, WebviSelectBitmask, WebviSelect
+)
+from PyQt4.QtGui import (
+    QApplication,
+    QTreeWidget, QTreeWidgetItem,
+    QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView
+)
+from PyQt4.QtCore import Qt
+import event
+import qtwrap
+from contextlib import closing
+import xml.etree.cElementTree as etree
+from lib import Record
+from datetime import (datetime, timedelta)
+from sys import stderr
+from lib import Function
+from functools import partial
+
+class traced(Function):
+    def __init__(self, func, abbrev=set()):
+        self.func = func
+        self.name = func.__name__
+        self.abbrev = abbrev
+    def __call__(self, *args, **kw):
+        print(self.name, end="(", file=stderr)
+        
+        for (k, v) in enumerate(args):
+            if k:
+                print(", ", end="", file=stderr)
+            if k in self.abbrev:
+                v = "..."
+            else:
+                v = repr(v)
+            print(v, end="", file=stderr)
+        
+        comma = bool(args)
+        for (k, v) in kw:
+            if comma:
+                print(", ", end="", file=stderr)
+            if k in self.abbrev:
+                v = "..."
+            else:
+                v = repr(v)
+            print("{}={}".format(k, v), end="", file=stderr)
+            comma = True
+        
+        print(end=") ", file=stderr)
+        stderr.flush()
+        ret = self.func(*args, **kw)
+        if "return" in self.abbrev:
+            v = "..."
+        else:
+            v = repr(ret)
+        print("->", v, file=stderr)
+        return ret
+
+def trace(func, *args, **kw):
+    traced(func)(*args, **kw)
+
+def trace_coro(coro, *args, **kw):
+    print(coro.__name__, args, kw, end=" ", file=stderr)
+    stderr.flush()
+    ret = (yield coro(*args, **kw))
+    print(repr(ret), file=stderr)
+    raise StopIteration(ret)
+
+def main():
+    #webvi.set_config(WebviConfig.TEMPLATE_PATH, "../templates")
+    webvi.set_config(WebviConfig.TEMPLATE_PATH, "/home/proj/vod/webvi/templates")
+    app = QApplication([])
+    
+    w = Window(
+        windowTitle="Webvi",
+    )
+    
+    w.wv_timeout = None
+    webvi.set_config(WebviConfig.TIMEOUT_CALLBACK, w.set_wv_timeout)
+    
+    with closing(event.Group()) as w.coros:
+        event.Routine(w.main(), w.coros)
+        app.exec_()
+
+class Window(QMainWindow):
+    def __init__(self, *args, **kw):
+        QMainWindow.__init__(self, *args, **kw)
+        
+        m = self.menuBar().addMenu("Dessert&s")
+        #~ m.addAction(QAction("Refresh menu", self))
+        #~ m.addAction(QAction("Go to . . .", self))
+        #~ m.addAction(QAction("Copy menu URI", self))
+        #~ m.addAction(QAction("Copy stream URL", self))
+        #~ m.addAction(QAction("Play", self))
+        #~ m.addAction(QAction("Download", self))
+        m.addAction(QAction("E&xit", self,
+            menuRole=QAction.QuitRole,
+            triggered=self.close,
+        ))
+        
+        self.tree = QTreeWidget(
+            selectionMode=QTreeWidget.ExtendedSelection,
+            contextMenuPolicy=Qt.ActionsContextMenu,
+            itemExpanded=self.size_tree,
+            itemCollapsed=self.size_tree,
+            expandsOnDoubleClick=False,
+            headerHidden=True,
+            #~ sortingEnabled=True,
+        )
+        self.tree.itemExpanded.connect(self.item_expanded)
+        self.tree.setHeaderLabel("Name")
+        
+        header = self.tree.header()
+        header.setMovable(False)
+        #~ header.pyqtConfigure(showSortIndicator=True)
+        
+        self.setCentralWidget(self.tree)
+        
+        self.show()
+    
+    def item_expanded(self, item):
+        data = item.data(0, Qt.UserRole).toPyObject()
+        if data.opened:
+            return
+        data.opened = True
+        
+        event.Routine(self.menu(item, data.ref), self.coros)
+    
+    @partial(traced, abbrev={0})
+    def set_wv_timeout(self, timeout, _):
+        if timeout < 0:
+            self.wv_timeout = None
+        else:
+            self.wv_timeout = (
+                datetime.utcnow() + timedelta(milliseconds=timeout))
+    
+    def main(self):
+        return self.menu(self.tree.invisibleRootItem(),
+            "wvt:///?srcurl=mainmenu")
+    
+    def menu(self, parent, ref):
+        handle = webvi.new_request(ref, WebviRequestType.MENU)
+        if handle == -1:
+            raise Exception("Failed to open handle")
+        
+        webvi.set_opt(handle, WebviOpt.WRITEFUNC, buffer_write)
+        
+        buffer = bytearray()
+        webvi.set_opt(handle, WebviOpt.WRITEDATA, buffer)
+        
+        webvi.start_handle(handle)
+        
+        bitmasks = dict(
+            read=WebviSelectBitmask.READ,
+            write=WebviSelectBitmask.WRITE,
+        )
+        
+        while True:
+            (_, read, write, exc, _) = webvi.fdset()
+            if not any((read, write, exc)):
+                (finished, status, errmsg, _) = webvi.pop_message()
+                if finished == handle:
+                    break
+                
+                if finished != -1:
+                    status = 501
+                    errmsg = ("Unexpected handle (got {}, expected {})".
+                        format(finished, handle))
+                if status != -1 or errmsg:
+                    break
+            
+            if self.wv_timeout is None:
+                timeout = 10
+            else:
+                now = datetime.utcnow()
+                if self.wv_timeout <= now:
+                    timeout = 0
+                else:
+                    timeout = self.wv_timeout - now
+                    timeout = (timeout.days * 24 * 60 * 60 +
+                        timeout.seconds + timeout.microseconds * 1e-6)
+            
+            if timeout:
+                (fd, op) = (yield qtwrap.select(
+                    read=read, write=write, exc=exc, timeout=timeout))
+            else:
+                fd = None
+            
+            if fd is None:
+                self.wv_timeout = None
+                webvi.perform(WebviSelect.TIMEOUT, WebviSelectBitmask.CHECK)
+                continue
+            
+            webvi.perform(fd, bitmasks[op])
+            
+            while True:
+                (finished, status, errmsg, remaining) = webvi.pop_message()
+                if finished == handle or not remaining:
+                    break
+            if finished == handle:
+                break
+        
+        webvi.delete_handle(handle)
+        
+        if status != 0:
+            raise EnvironmentError(status, errmsg)
+        parent.takeChildren()
+        
+        root = etree.XML(str(buffer))
+        if root.tag != "wvmenu":
+            raise Exception("Expected <wvmenu> root element")
+        
+        #~ queryitems = []
+        #~ menupage = menu.Menu()
+        for node in root:
+            if node.tag == "title":
+                title = node.text
+                if title:
+                    item = QTreeWidgetItem(parent, (title,))
+                    item.setIcon(0, QIcon.fromTheme("start-here"))
+                    font = item.font(0)
+                    font.setBold(True)
+                    item.setFont(0, font)
+            
+            elif node.tag == "link":
+                label = node.find("label")
+                if label is None:
+                    label = ""
+                else:
+                    label = label.text
+                item = QTreeWidgetItem(parent, (label,))
+                
+                data = Record(opened=False)
+                item.setData(0, Qt.UserRole, data)
+                
+                item_ref = node.find("ref")
+                if item_ref is not None:
+                    data.ref = item_ref.text
+                    QTreeWidgetItem(item, (". . .",)).setDisabled(True)
+                
+                stream = node.find("stream")
+                if stream is not None:
+                    data.stream = stream.text
+                    item.setIcon(0, QIcon.fromTheme("text-x-generic"))
+                    font = item.font(0)
+                    font.setFamily("serif")
+                    font.setItalic(True)
+                    item.setFont(0, font)
+                    print(label, data.stream, file=stderr)
+            
+            #~ elif node.tag == 'textfield':
+                #~ menuitem = self.parse_textfield(node)
+                #~ menupage.add(menuitem)
+                #~ queryitems.append(menuitem)
+            #~ elif node.name == 'itemlist':
+                #~ menuitem = self.parse_itemlist(node)
+                #~ menupage.add(menuitem)
+                #~ queryitems.append(menuitem)
+            
+            elif node.tag == 'textarea':
+                # TODO: word wrap
+                QTreeWidgetItem(parent, (node.find("label").text,))
+            
+            #~ elif node.name == 'button':
+                #~ menuitem = self.parse_button(node, queryitems)
+                #~ menupage.add(menuitem)
+            
+            else:
+                etree.dump(node)
+        self.size_tree()
+        return
+    
+    def size_tree(self):
+        self.tree.resizeColumnToContents(0)
+
+@partial(traced, abbrev={0, "data"})
+def buffer_write(data, len, buffer):
+    buffer.extend(data)
+    return len
+
+if "__main__" == __name__:
+    from gc import (set_debug, DEBUG_LEAK, collect, garbage)
+    set_debug(DEBUG_LEAK)
+    
+    try:
+        main()
+    finally:
+        collect()
+        # Cannot help that class definitions create garbage cycles
+        ignore = [g for g in garbage if isinstance(g, type)]
+        del garbage[:]
+        collect()
+        if len(garbage):
+            import cycles
+            cycles.show()
+            print(len(garbage), file=stderr)
+            for g in garbage:
+                print(g, file=stderr)
