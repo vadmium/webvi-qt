@@ -148,7 +148,7 @@ class Window(QMainWindow):
         
         event.Routine(self.menu(item, data.ref), self.coros)
     
-    @partial(traced, abbrev={0})
+    @partial(traced, abbrev=set((0,)))
     def set_wv_timeout(self, timeout, _):
         if timeout < 0:
             self.wv_timeout = None
@@ -295,7 +295,7 @@ class Window(QMainWindow):
     def size_tree(self):
         self.tree.resizeColumnToContents(0)
 
-@partial(traced, abbrev={0, "data"})
+@partial(traced, abbrev=set((0, "data")))
 def buffer_write(data, len, buffer):
     buffer.extend(data)
     return len
