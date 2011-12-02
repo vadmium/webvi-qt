@@ -89,8 +89,9 @@ def trace_coro(coro, *args, **kw):
     raise StopIteration(ret)
 
 def main():
-    #webvi.set_config(WebviConfig.TEMPLATE_PATH, "../templates")
-    webvi.set_config(WebviConfig.TEMPLATE_PATH, "/home/proj/vod/webvi/templates")
+    (opt, _) = webvi.load_config()
+    webvi.apply_config(opt)
+    
     app = QApplication([])
     
     w = Window(
