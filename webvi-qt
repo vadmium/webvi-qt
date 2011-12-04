@@ -319,10 +319,9 @@ if "__main__" == __name__:
         if garbage:
             try:
                 import cycles
+                cycles.show()
             except Exception:
                 excepthook(*exc_info())
-            else:
-                cycles.show()
             
             print(len(garbage), file=stderr)
             for g in garbage:
