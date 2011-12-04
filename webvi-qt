@@ -27,7 +27,7 @@ from webvi.constants import (
 from PyQt4.QtGui import (
     QApplication,
     QTreeWidget, QTreeWidgetItem,
-    QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView
+    QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle
 )
 from PyQt4.QtCore import Qt
 import event
@@ -240,7 +240,8 @@ class Window(QMainWindow):
                 title = node.text
                 if title:
                     item = QTreeWidgetItem(parent, (title,))
-                    item.setIcon(0, QIcon.fromTheme("start-here"))
+                    item.setIcon(0, QApplication.style().standardIcon(
+                        QStyle.SP_ArrowForward))
                     font = item.font(0)
                     font.setBold(True)
                     item.setFont(0, font)
@@ -264,7 +265,8 @@ class Window(QMainWindow):
                 stream = node.find("stream")
                 if stream is not None:
                     data.stream = stream.text
-                    item.setIcon(0, QIcon.fromTheme("text-x-generic"))
+                    item.setIcon(0, QApplication.style().standardIcon(
+                        QStyle.SP_FileIcon))
                     font = item.font(0)
                     font.setFamily("serif")
                     font.setItalic(True)
