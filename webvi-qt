@@ -137,14 +137,8 @@ class Window(QMainWindow):
             expandsOnDoubleClick=False,
             verticalScrollMode=QTreeWidget.ScrollPerPixel,
             headerHidden=True,
-            #~ sortingEnabled=True,
         )
         self.tree.itemExpanded.connect(self.item_expanded)
-        self.tree.setHeaderLabel("Name")
-        
-        header = self.tree.header()
-        header.setMovable(False)
-        #~ header.pyqtConfigure(showSortIndicator=True)
         
         self.setCentralWidget(self.tree)
         
