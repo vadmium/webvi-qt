@@ -39,6 +39,7 @@ from datetime import (datetime, timedelta)
 from sys import stderr
 from lib import Function
 from functools import partial
+from sys import (excepthook, exc_info)
 
 class traced(Function):
     def __init__(self, func, name=None, abbrev=set()):
@@ -318,9 +319,13 @@ if "__main__" == __name__:
         ignore = [g for g in garbage if isinstance(g, type)]
         del garbage[:]
         collect()
-        if len(garbage):
-            import cycles
-            cycles.show()
+        if garbage:
+            try:
+                import cycles
+                cycles.show()
+            except Exception:
+                excepthook(*exc_info())
+            
             print(len(garbage), file=stderr)
             for g in garbage:
-                print(g, file=stderr)
+                print(repr(g), file=stderr)
