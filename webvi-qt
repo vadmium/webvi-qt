@@ -135,6 +135,7 @@ class Window(QMainWindow):
             itemExpanded=self.size_tree,
             itemCollapsed=self.size_tree,
             expandsOnDoubleClick=False,
+            verticalScrollMode=QTreeWidget.ScrollPerPixel,
             headerHidden=True,
             #~ sortingEnabled=True,
         )
