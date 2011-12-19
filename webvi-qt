@@ -33,7 +33,7 @@ import event
 from contextlib import closing
 import xml.etree.cElementTree as etree
 from lib import Record
-from sys import stderr
+from sys import (stderr, argv)
 from lib import Function
 from functools import partial
 from sys import (excepthook, exc_info)
@@ -105,7 +105,7 @@ def main():
     )
     
     with closing(event.Group()) as w.coros:
-        event.Routine(w.main(), w.coros)
+        event.Routine(w.main(*argv[1:]), w.coros)
         app.exec_()
 
 class Window(QMainWindow):
@@ -154,14 +154,17 @@ class Window(QMainWindow):
             return
         data.opened = True
         
-        event.Routine(self.menu(item, data.ref), self.coros)
+        event.Routine(self.menu(item), self.coros)
     
-    def main(self):
-        return self.menu(self.tree.invisibleRootItem(),
-            "wvt:///?srcurl=mainmenu")
+    def main(self, ref="wvt:///?srcurl=mainmenu"):
+        root = self.tree.invisibleRootItem()
+        root.setData(0, Qt.UserRole, Record(ref=ref))
+        return self.menu(root)
     
-    def menu(self, parent, ref):
-        handle = webvi.new_request(ref, WebviRequestType.MENU)
+    def menu(self, parent):
+        handle = trace(webvi.new_request,
+            parent.data(0, Qt.UserRole).toPyObject().ref,
+            WebviRequestType.MENU)
         if handle == -1:
             raise Exception("Failed to open handle")
         
