@@ -18,7 +18,6 @@ from __future__ import print_function
 
 # TODO
 # Investigate timeouts (keeps retrying when gateway removed)
-# Investigate parallel menu requests (nothing ever terminates)
 
 import webvi.api as webvi
 from webvi.constants import (
@@ -29,13 +28,11 @@ from PyQt4.QtGui import (
     QTreeWidget, QTreeWidgetItem,
     QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle
 )
-from PyQt4.QtCore import Qt
+from PyQt4.QtCore import (Qt, QTimer, QSocketNotifier)
 import event
-import qtwrap
 from contextlib import closing
 import xml.etree.cElementTree as etree
 from lib import Record
-from datetime import (datetime, timedelta)
 from sys import stderr
 from lib import Function
 from functools import partial
@@ -107,9 +104,6 @@ def main():
         windowTitle="Webvi",
     )
     
-    w.wv_timeout = None
-    webvi.set_config(WebviConfig.TIMEOUT_CALLBACK, w.set_wv_timeout)
-    
     with closing(event.Group()) as w.coros:
         event.Routine(w.main(), w.coros)
         app.exec_()
@@ -144,6 +138,15 @@ class Window(QMainWindow):
         self.setCentralWidget(self.tree)
         
         self.show()
+        
+        self.wv_finished = dict()
+        self.wv_timer = QTimer(
+            singleShot=True,
+            timeout=partial(self.wv_action,
+                WebviSelect.TIMEOUT, WebviSelectBitmask.CHECK),
+        )
+        webvi.set_config(WebviConfig.TIMEOUT_CALLBACK, self.set_wv_timeout)
+        self.wv_notes = list()
     
     def item_expanded(self, item):
         data = item.data(0, Qt.UserRole).toPyObject()
@@ -152,14 +155,6 @@ class Window(QMainWindow):
         data.opened = True
         
         event.Routine(self.menu(item, data.ref), self.coros)
-    
-    @partial(traced, abbrev=set((0,)))
-    def set_wv_timeout(self, timeout, _):
-        if timeout < 0:
-            self.wv_timeout = None
-        else:
-            self.wv_timeout = (
-                datetime.utcnow() + timedelta(milliseconds=timeout))
     
     def main(self):
         return self.menu(self.tree.invisibleRootItem(),
@@ -175,62 +170,15 @@ class Window(QMainWindow):
         buffer = bytearray()
         webvi.set_opt(handle, WebviOpt.WRITEDATA, buffer)
         
+        finished = event.Queue()
+        self.wv_finished[handle] = finished
+        
         webvi.start_handle(handle)
+        self.reschedule_wv()
+        yield finished.get()
         
-        bitmasks = dict(
-            read=WebviSelectBitmask.READ,
-            write=WebviSelectBitmask.WRITE,
-        )
+        trace(webvi.delete_handle, handle)
         
-        while True:
-            (_, read, write, exc, _) = webvi.fdset()
-            if not any((read, write, exc)):
-                (finished, status, errmsg, _) = webvi.pop_message()
-                if finished == handle:
-                    break
-                
-                if finished != -1:
-                    status = 501
-                    errmsg = ("Unexpected handle (got {}, expected {})".
-                        format(finished, handle))
-                if status != -1 or errmsg:
-                    break
-            
-            if self.wv_timeout is None:
-                timeout = 10
-            else:
-                now = datetime.utcnow()
-                if self.wv_timeout <= now:
-                    timeout = 0
-                else:
-                    timeout = self.wv_timeout - now
-                    timeout = (timeout.days * 24 * 60 * 60 +
-                        timeout.seconds + timeout.microseconds * 1e-6)
-            
-            if timeout:
-                (fd, op) = (yield qtwrap.select(
-                    read=read, write=write, exc=exc, timeout=timeout))
-            else:
-                fd = None
-            
-            if fd is None:
-                self.wv_timeout = None
-                webvi.perform(WebviSelect.TIMEOUT, WebviSelectBitmask.CHECK)
-                continue
-            
-            webvi.perform(fd, bitmasks[op])
-            
-            while True:
-                (finished, status, errmsg, remaining) = webvi.pop_message()
-                if finished == handle or not remaining:
-                    break
-            if finished == handle:
-                break
-        
-        webvi.delete_handle(handle)
-        
-        if status != 0:
-            raise EnvironmentError(status, errmsg)
         parent.takeChildren()
         
         root = etree.XML(str(buffer))
@@ -298,6 +246,49 @@ class Window(QMainWindow):
                 etree.dump(node)
         self.size_tree()
         return
+    
+    @traced
+    def set_wv_timeout(self, timeout, _):
+        if timeout < 0:
+            self.wv_timer.stop()
+        else:
+            self.wv_timer.start(timeout)
+    
+    def reschedule_wv(self):
+        while self.wv_notes:
+            self.wv_notes.pop().setEnabled(False)
+        
+        while True:
+            (finished, status, errmsg, remaining) = webvi.pop_message()
+            if finished != -1:
+                finished = self.wv_finished.pop(finished)
+                if status:
+                    finished.put(exc=EnvironmentError(status, errmsg))
+                else:
+                    finished.put()
+            if status not in (-1, 0):
+                raise EnvironmentError(status, errmsg)
+            if not remaining:
+                break
+        
+        (_, read, write, exc, _) = webvi.fdset()
+        for (name, type, bitmask) in (
+            ("read", QSocketNotifier.Read, WebviSelectBitmask.READ),
+            ("write", QSocketNotifier.Write, WebviSelectBitmask.WRITE),
+            ("exc", QSocketNotifier.Exception, WebviSelectBitmask.EXCEPTION),
+        ):
+            action = partial(self.wv_action, bitmask=bitmask)
+            for fd in locals()[name]:
+                note = QSocketNotifier(fd, type, activated=action)
+                note.setEnabled(True)
+                self.wv_notes.append(note)
+        
+        if not self.wv_timer.isActive():
+            self.wv_timer.start(10 * 1000)
+    
+    def wv_action(self, fd, bitmask):
+        webvi.perform(fd, bitmask)
+        self.reschedule_wv()
     
     def size_tree(self):
         self.tree.resizeColumnToContents(0)
