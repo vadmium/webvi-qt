@@ -181,7 +181,10 @@ class Window(QMainWindow):
         
         webvi.start_handle(handle)
         self.reschedule_wv()
-        yield finished.get()
+        
+        if not finished:
+            yield finished
+        next(finished)
         
         webvi.delete_handle(handle)
         
@@ -290,9 +293,9 @@ class Window(QMainWindow):
             if finished != -1:
                 finished = self.wv_finished.pop(finished)
                 if status:
-                    finished.put(exc=EnvironmentError(status, errmsg))
+                    finished.throw(EnvironmentError(status, errmsg))
                 else:
-                    finished.put()
+                    finished.send()
             if status not in (-1, 0):
                 raise EnvironmentError(status, errmsg)
             if not remaining:
