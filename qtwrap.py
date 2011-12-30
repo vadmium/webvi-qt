@@ -58,7 +58,7 @@ def select(read=(), write=(), exc=(), timeout=None):
         exc=QSocketNotifier.Exception,
     ).items())
     
-    events = event.EventSet()
+    events = event.Any()
     
     if timeout is not None:
         timer = QTimer(singleShot=True, active=True, interval=timeout * 1000)
