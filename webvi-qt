@@ -27,9 +27,11 @@ from PyQt4.QtGui import (
     QApplication,
     QTreeWidget, QTreeWidgetItem,
     QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle,
-    QLineEdit, QSplitter, QWidget, QFormLayout, QScrollArea
+    QLineEdit, QSplitter, QWidget, QFormLayout, QScrollArea, QDialog,
+    QDialogButtonBox, QComboBox
 )
 from PyQt4.QtCore import (Qt, QTimer, QSocketNotifier)
+import qtwrap
 import event
 from contextlib import closing
 import xml.etree.cElementTree as etree
@@ -126,6 +128,30 @@ class Window(QMainWindow):
             return
         data.opened = True
         
+        if hasattr(data, "ref"):
+            event.Routine(self.menu(item), self.coros)
+        if hasattr(data, "submission"):
+            dialog = item.parent().data(0, Qt.UserRole).toPyObject().dialog
+            dialog.pyqtConfigure(accepted=partial(self.query_submit, item))
+            dialog.show()
+    
+    def query_submit(self, item):
+        QTreeWidgetItem(item, (". . .",)).setDisabled(True)
+        item.setChildIndicatorPolicy(
+            QTreeWidgetItem.DontShowIndicatorWhenChildless)
+        lay = item.parent().data(0, Qt.UserRole).toPyObject().dialog.layout()
+        data = item.data(0, Qt.UserRole).toPyObject()
+        
+        params = list()
+        for i in range(lay.rowCount() - 1):
+            widget = lay.itemAt(i, QFormLayout.FieldRole).widget()
+            if isinstance(widget, QLineEdit):
+                params.append("subst={0},{1}".format(widget.name,
+                    widget.text()))
+            if isinstance(widget, QComboBox):
+                params.append("subst={0},{1}".format(widget.name,
+                    widget.itemData(widget.currentIndex()).toPyObject()))
+        data.ref = data.submission + "&" + "&".join(params)
         event.Routine(self.menu(item), self.coros)
     
     def item_changed(self, current, _):
@@ -139,9 +165,9 @@ class Window(QMainWindow):
         return self.menu(root)
     
     def menu(self, parent):
+        parent_data = parent.data(0, Qt.UserRole).toPyObject()
         handle = trace(webvi.new_request,
-            parent.data(0, Qt.UserRole).toPyObject().ref,
-            WebviRequestType.MENU)
+            parent_data.ref, WebviRequestType.MENU)
         if handle == -1:
             raise Exception("Failed to open handle")
         
@@ -165,8 +191,7 @@ class Window(QMainWindow):
         if root.tag != "wvmenu":
             raise Exception("Expected <wvmenu> root element")
         
-        #~ queryitems = []
-        #~ menupage = menu.Menu()
+        parent_data.dialog = None
         for node in root:
             if node.tag == "title":
                 title = node.text
@@ -205,26 +230,49 @@ class Window(QMainWindow):
                     item.setFont(0, font)
                     print(label, data.stream, file=stderr)
             
-            #~ elif node.tag == 'textfield':
-                #~ menuitem = self.parse_textfield(node)
-                #~ menupage.add(menuitem)
-                #~ queryitems.append(menuitem)
-            #~ elif node.name == 'itemlist':
-                #~ menuitem = self.parse_itemlist(node)
-                #~ menupage.add(menuitem)
-                #~ queryitems.append(menuitem)
+            elif node.tag == "textfield":
+                query_dialog(parent_data, self)
+                lay = parent_data.dialog.layout()
+                edit = QLineEdit()
+                lay.insertRow(lay.rowCount() - 1,
+                    node.find("label").text, edit)
+                edit.name = node.get("name")
+            
+            elif node.tag == "itemlist":
+                query_dialog(parent_data, self)
+                lay = parent_data.dialog.layout()
+                box = QComboBox()
+                for item in node.findall("item"):
+                    box.addItem(item.text, userData=item.get("value"))
+                lay.insertRow(lay.rowCount() - 1,
+                    node.find("label").text, box)
+                box.name = node.get("name")
             
             elif node.tag == 'textarea':
                 # TODO: word wrap
                 QTreeWidgetItem(parent, (node.find("label").text,))
             
-            #~ elif node.name == 'button':
-                #~ menuitem = self.parse_button(node, queryitems)
-                #~ menupage.add(menuitem)
+            elif node.tag == "button":
+                query_dialog(parent_data, self)
+                item = QTreeWidgetItem(parent, (node.find("label").text,))
+                item.setIcon(0, QApplication.style().standardIcon(
+                    QStyle.SP_DialogOkButton))
+                item.setData(0, Qt.UserRole, Record(
+                    opened=False,
+                    submission=node.find("submission").text,
+                ))
+                item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
             
             else:
-                etree.dump(node)
+                raise TypeError(
+                    "Unexpected <wvmenu> node: <{0}>".format(node.tag))
         self.size_tree()
+        
+        if parent_data.dialog is not None:
+            if title:
+                parent_data.dialog.setWindowTitle(title)
+            lay.itemAt(0, QFormLayout.FieldRole).widget().setFocus()
+        
         return
     
     def set_wv_timeout(self, timeout, _):
@@ -271,6 +319,19 @@ class Window(QMainWindow):
     
     def size_tree(self):
         self.tree.resizeColumnToContents(0)
+
+def query_dialog(data, parent):
+    if data.dialog:
+        return
+    
+    data.dialog = QDialog(parent=parent)
+    lay = qtwrap.FormLayout()
+    lay.addRow(QDialogButtonBox(
+        standardButtons=QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+        accepted=data.dialog.accept,
+        rejected=data.dialog.reject,
+    ))
+    data.dialog.setLayout(lay)
 
 class WindowTray(QWidget):
     def __init__(self, main):
