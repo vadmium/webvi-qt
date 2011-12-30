@@ -26,7 +26,8 @@ from webvi.constants import (
 from PyQt4.QtGui import (
     QApplication,
     QTreeWidget, QTreeWidgetItem,
-    QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle
+    QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle,
+    QLineEdit, QSplitter, QWidget, QFormLayout, QScrollArea
 )
 from PyQt4.QtCore import (Qt, QTimer, QSocketNotifier)
 import event
@@ -82,10 +83,28 @@ class Window(QMainWindow):
             expandsOnDoubleClick=False,
             verticalScrollMode=QTreeWidget.ScrollPerPixel,
             headerHidden=True,
+            currentItemChanged=self.item_changed,
         )
         self.tree.itemExpanded.connect(self.item_expanded)
         
-        self.setCentralWidget(self.tree)
+        self.location = QLineEdit()
+        
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.tree)
+        tray = WindowTray(self.tree)
+        lay = QFormLayout()
+        lay.addRow("&Location:", self.location)
+        self.info = QScrollArea()
+        self.info.setWidget(QLabel("'Ello I am an 'eading\n\nI\nlove\nto\n'ead?!\n\n\nblausadfoijaofij awoefj aowefj awofj aowejf owejfoaweji foawej foiawje foiaj weofj aweofij wej"))
+        #~ infolay = QVBoxLayout()
+        #~ infolay.addWidget(QLabel("'Ello I am an 'eading\n\nI love to 'ead?!\n\n\nblausadfoijaofij awoefj aowefj awofj aowejf owejfoaweji foawej foiawje foiaj weofj aweofij wej"))
+        #~ self.info.setLayout(infolay)
+        lay.addRow(self.info)
+        lay.addRow("&Ref:", QLineEdit())
+        lay.addRow("&Stream:", QLineEdit())
+        tray.setLayout(lay)
+        splitter.addWidget(tray)
+        self.setCentralWidget(splitter)
         
         self.show()
         
@@ -105,6 +124,11 @@ class Window(QMainWindow):
         data.opened = True
         
         event.Routine(self.menu(item), self.coros)
+    
+    def item_changed(self, current, _):
+        self.location.setText(
+            (current.parent() or self.tree.invisibleRootItem()).
+            data(0, Qt.UserRole).toPyObject().ref)
     
     def main(self, ref="wvt:///?srcurl=mainmenu"):
         root = self.tree.invisibleRootItem()
@@ -244,6 +268,17 @@ class Window(QMainWindow):
     
     def size_tree(self):
         self.tree.resizeColumnToContents(0)
+
+class WindowTray(QWidget):
+    def __init__(self, main):
+        QWidget.__init__(self)
+        self.main = main
+    
+    def keyPressEvent(self, press):
+        if press.key() == Qt.Key_Escape:
+            self.main.setFocus(Qt.ShortcutFocusReason)
+        else:
+            return QWidget.keyPressEvent(self, press)
 
 #~ @partial(traced, abbrev=set((0, "data")))
 def buffer_write(data, len, buffer):
