@@ -2,11 +2,6 @@
 #coding=UTF-8
 from __future__ import print_function
 
-# python2-webvi requirements >=
-# python2-pycurl
-# python2-libxslt1
-# python2-libxml2
-#
 # Run uninstalled webvi as
 # PYTHONPATH=src/libwebvi python2 src/webvicli/webvi --templatepath=templates
 
@@ -135,7 +130,7 @@ class Window(QMainWindow):
         self.reschedule_wv()
         yield finished.get()
         
-        trace(webvi.delete_handle, handle)
+        webvi.delete_handle(handle)
         
         parent.takeChildren()
         
@@ -205,7 +200,6 @@ class Window(QMainWindow):
         self.size_tree()
         return
     
-    @traced
     def set_wv_timeout(self, timeout, _):
         if timeout < 0:
             self.wv_timer.stop()
@@ -251,7 +245,7 @@ class Window(QMainWindow):
     def size_tree(self):
         self.tree.resizeColumnToContents(0)
 
-@partial(traced, abbrev=set((0, "data")))
+#~ @partial(traced, abbrev=set((0, "data")))
 def buffer_write(data, len, buffer):
     buffer.extend(data)
     return len
