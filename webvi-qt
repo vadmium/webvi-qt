@@ -296,7 +296,7 @@ class Window(QMainWindow):
                     finished.throw(EnvironmentError(status, errmsg))
                 else:
                     finished.send()
-            if status not in (-1, 0):
+            elif status not in (-1, 0):
                 raise EnvironmentError(status, errmsg)
             if not remaining:
                 break
