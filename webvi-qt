@@ -28,7 +28,7 @@ from PyQt4.QtGui import (
     QTreeWidget, QTreeWidgetItem,
     QMainWindow, QAction, QLabel, QIcon, QFont, QHeaderView, QStyle,
     QLineEdit, QSplitter, QWidget, QFormLayout, QScrollArea, QDialog,
-    QDialogButtonBox, QComboBox
+    QDialogButtonBox, QComboBox, QProgressDialog
 )
 from PyQt4.QtCore import (Qt, QTimer, QSocketNotifier)
 import qtwrap
@@ -89,6 +89,7 @@ class Window(QMainWindow):
             verticalScrollMode=QTreeWidget.ScrollPerPixel,
             headerHidden=True,
             currentItemChanged=self.item_changed,
+            itemActivated=self.item_activated,
         )
         self.tree.itemExpanded.connect(self.item_expanded)
         
@@ -231,7 +232,6 @@ class Window(QMainWindow):
                     font.setFamily("serif")
                     font.setItalic(True)
                     item.setFont(0, font)
-                    print(label, data.stream, file=stderr)
             
             elif node.tag == "textfield":
                 query_dialog(parent_data, self)
@@ -277,6 +277,79 @@ class Window(QMainWindow):
             lay.itemAt(0, QFormLayout.FieldRole).widget().setFocus()
         
         return
+    
+    def item_activated(self, item, _):
+        data = item.data(0, Qt.UserRole).toPyObject()
+        try:
+            stream = data.stream
+        except AttributeError:
+            return
+        event.Routine(self.download(stream), self.coros)
+    
+    def download(self, stream):
+        handle = trace(webvi.new_request, stream, WebviRequestType.FILE)
+        if handle == -1:
+            raise Exception("Failed to open handle")
+        
+        progress = QProgressDialog(self,
+            labelText="Waiting for information",
+            autoReset=False,
+            value=0,
+        )
+        canceled = qtwrap.Event(progress.canceled)
+        
+        finished = event.Queue()
+        self.wv_finished[handle] = finished
+        
+        writefunc = event.Queue()
+        webvi.set_opt(handle, WebviOpt.WRITEFUNC, traced(writefunc, name="writefunc", abbrev=(0,)))
+        
+        trace(webvi.start_handle, handle)
+        trace(self.reschedule_wv)
+        
+        try:
+            if not writefunc and not finished:
+                yield trace_coro(event.Any, (writefunc, finished, canceled))
+                if progress.wasCanceled():
+                    return
+            
+            (_, contentlength) = trace(webvi.get_info, handle,
+                WebviInfo.CONTENT_LENGTH)
+            progress.setMaximum(contentlength)
+            
+            (_, url) = webvi.get_info(handle, WebviInfo.URL)
+            progress.setLabelText(url)
+            
+            (_, title) = webvi.get_info(handle, WebviInfo.STREAM_TITLE)
+            dialog = QFileDialog(self)
+            dialog.selectFile(title)
+            dialog.show()
+            if (yield qtwrap.Event(dialog.finished)) != QDialog.Accepted:
+                return
+            
+            with open(dialog.selectedFile(), "wb") as file:
+                while True:
+                    for (data, _, _) in writefunc:
+                        file.write(data)
+                        progress.setValue(file.tell())
+                    
+                    if finished:
+                        break
+                    
+                    yield event.Any((writefunc, finished, canceled))
+                    if progress.wasCanceled():
+                        return
+        
+        finally:
+            trace(webvi.stop_handle, handle)
+            if not finished:
+                yield finished
+            try:
+                next(finished)
+            except EnvironmentError:  # Ignore "Aborted" exception
+                excepthook(*exc_info())
+            webvi.delete_handle(handle)
+            progress.reset()
     
     def set_wv_timeout(self, timeout, _):
         if timeout < 0:
