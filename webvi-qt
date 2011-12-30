@@ -37,12 +37,15 @@ from lib import Record
 from sys import (stderr, argv)
 from functools import partial
 from sys import (excepthook, exc_info)
+from ftrace import print_call
 
 def trace_coro(coro, *args, **kw):
-    print(coro.__name__, args, kw, end=" ", file=stderr)
+    stderr.write("(yield ")
+    print_call(coro.__name__, args, kw)
+    stderr.write(")")
     stderr.flush()
     ret = (yield coro(*args, **kw))
-    print("->", repr(ret), file=stderr)
+    print(" ->", repr(ret), file=stderr)
     raise StopIteration(ret)
 
 def main():
