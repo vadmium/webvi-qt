@@ -26,7 +26,7 @@ class Event(event.Event):
     def slot(self, *args):
         self.callback(args)
     def __repr__(self):
-        return "{}({})".format(type(self).__name__, self.signal)
+        return "{0}({1})".format(type(self).__name__, self.signal)
 
 class FdEvent(Event):
     def __init__(self, *args, **kw):
